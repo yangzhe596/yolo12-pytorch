@@ -238,7 +238,7 @@ class YoloBody(nn.Module):
 
         if pretrained_path and os.path.exists(pretrained_path):
             print(f"Loading pretrained weights from {pretrained_path}")
-            checkpoint = torch.load(pretrained_path, map_location="cpu")
+            checkpoint = torch.load(pretrained_path, map_location="cpu", weights_only=False)
 
             # 处理不同格式的checkpoint
             if isinstance(checkpoint, dict):
@@ -257,6 +257,9 @@ class YoloBody(nn.Module):
             else:
                 state_dict = checkpoint
 
+            # 建立key映射关系 (ultralytics格式 -> 当前模型格式)
+            key_mapping = self._build_key_mapping()
+
             # 加载匹配的权重
             model_dict = self.state_dict()
             load_key, no_load_key, temp_dict = [], [], {}
@@ -266,6 +269,10 @@ class YoloBody(nn.Module):
                 new_k = k
                 if k.startswith('model.'):
                     new_k = k[6:]
+
+                # 使用映射表转换key
+                if new_k in key_mapping:
+                    new_k = key_mapping[new_k]
 
                 if new_k in model_dict.keys() and np.shape(model_dict[new_k]) == np.shape(v):
                     temp_dict[new_k] = v
@@ -279,6 +286,254 @@ class YoloBody(nn.Module):
             print(f"Successfully loaded {len(load_key)} keys")
             if no_load_key:
                 print(f"Failed to load {len(no_load_key)} keys (expected for different num_classes)")
+
+    def _build_key_mapping(self):
+        """建立 ultralytics 权重 key 到当前模型 key 的映射"""
+        mapping = {}
+
+        # Backbone mapping
+        # stem: model.0 -> stem
+        mapping['0.conv.weight'] = 'stem.conv.weight'
+        mapping['0.bn.weight'] = 'stem.bn.weight'
+        mapping['0.bn.bias'] = 'stem.bn.bias'
+        mapping['0.bn.running_mean'] = 'stem.bn.running_mean'
+        mapping['0.bn.running_var'] = 'stem.bn.running_var'
+        mapping['0.bn.num_batches_tracked'] = 'stem.bn.num_batches_tracked'
+
+        # dark2: model.1 (Conv) + model.2 (C3k2)
+        mapping['1.conv.weight'] = 'dark2.0.conv.weight'
+        mapping['1.bn.weight'] = 'dark2.0.bn.weight'
+        mapping['1.bn.bias'] = 'dark2.0.bn.bias'
+        mapping['1.bn.running_mean'] = 'dark2.0.bn.running_mean'
+        mapping['1.bn.running_var'] = 'dark2.0.bn.running_var'
+        mapping['1.bn.num_batches_tracked'] = 'dark2.0.bn.num_batches_tracked'
+
+        # C3k2: model.2 -> dark2.1
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'2.{suffix}'] = f'dark2.1.{suffix}'
+
+        # C3k2 bottleneck m.0
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'2.m.0.{suffix}'] = f'dark2.1.m.0.{suffix}'
+
+        # dark3: model.3 (Conv) + model.4 (C3k2)
+        mapping['3.conv.weight'] = 'dark3.0.conv.weight'
+        mapping['3.bn.weight'] = 'dark3.0.bn.weight'
+        mapping['3.bn.bias'] = 'dark3.0.bn.bias'
+        mapping['3.bn.running_mean'] = 'dark3.0.bn.running_mean'
+        mapping['3.bn.running_var'] = 'dark3.0.bn.running_var'
+        mapping['3.bn.num_batches_tracked'] = 'dark3.0.bn.num_batches_tracked'
+
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'4.{suffix}'] = f'dark3.1.{suffix}'
+            mapping[f'4.m.0.{suffix}'] = f'dark3.1.m.0.{suffix}'
+
+        # dark4: model.5 (Conv) + model.6 (A2C2f)
+        mapping['5.conv.weight'] = 'dark4.0.conv.weight'
+        mapping['5.bn.weight'] = 'dark4.0.bn.weight'
+        mapping['5.bn.bias'] = 'dark4.0.bn.bias'
+        mapping['5.bn.running_mean'] = 'dark4.0.bn.running_mean'
+        mapping['5.bn.running_var'] = 'dark4.0.bn.running_var'
+        mapping['5.bn.num_batches_tracked'] = 'dark4.0.bn.num_batches_tracked'
+
+        # A2C2f model.6 -> dark4.1
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'6.{suffix}'] = f'dark4.1.{suffix}'
+
+        # A2C2f attention blocks - model.6.m.0.x and model.6.m.1.x
+        for m_idx in [0, 1]:
+            for block_idx in [0, 1]:
+                prefix_pre = f'6.m.{m_idx}.{block_idx}'
+                prefix_cur = f'dark4.1.m.{m_idx}.{block_idx}'
+                for suffix in ['attn.qkv.conv.weight', 'attn.qkv.bn.weight', 'attn.qkv.bn.bias',
+                               'attn.qkv.bn.running_mean', 'attn.qkv.bn.running_var', 'attn.qkv.bn.num_batches_tracked',
+                               'attn.proj.conv.weight', 'attn.proj.bn.weight', 'attn.proj.bn.bias',
+                               'attn.proj.bn.running_mean', 'attn.proj.bn.running_var', 'attn.proj.bn.num_batches_tracked',
+                               'attn.pe.conv.weight', 'attn.pe.conv.bias',
+                               'attn.pe.bn.weight', 'attn.pe.bn.bias', 'attn.pe.bn.running_mean',
+                               'attn.pe.bn.running_var', 'attn.pe.bn.num_batches_tracked',
+                               'mlp.0.conv.weight', 'mlp.0.bn.weight', 'mlp.0.bn.bias',
+                               'mlp.0.bn.running_mean', 'mlp.0.bn.running_var', 'mlp.0.bn.num_batches_tracked',
+                               'mlp.1.conv.weight', 'mlp.1.bn.weight', 'mlp.1.bn.bias',
+                               'mlp.1.bn.running_mean', 'mlp.1.bn.running_var', 'mlp.1.bn.num_batches_tracked']:
+                    mapping[f'{prefix_pre}.{suffix}'] = f'{prefix_cur}.{suffix}'
+
+        # dark5: model.7 (Conv) + model.8 (A2C2f)
+        mapping['7.conv.weight'] = 'dark5.0.conv.weight'
+        mapping['7.bn.weight'] = 'dark5.0.bn.weight'
+        mapping['7.bn.bias'] = 'dark5.0.bn.bias'
+        mapping['7.bn.running_mean'] = 'dark5.0.bn.running_mean'
+        mapping['7.bn.running_var'] = 'dark5.0.bn.running_var'
+        mapping['7.bn.num_batches_tracked'] = 'dark5.0.bn.num_batches_tracked'
+
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'8.{suffix}'] = f'dark5.1.{suffix}'
+
+        for m_idx in [0, 1]:
+            for block_idx in [0, 1]:
+                prefix_pre = f'8.m.{m_idx}.{block_idx}'
+                prefix_cur = f'dark5.1.m.{m_idx}.{block_idx}'
+                for suffix in ['attn.qkv.conv.weight', 'attn.qkv.bn.weight', 'attn.qkv.bn.bias',
+                               'attn.qkv.bn.running_mean', 'attn.qkv.bn.running_var', 'attn.qkv.bn.num_batches_tracked',
+                               'attn.proj.conv.weight', 'attn.proj.bn.weight', 'attn.proj.bn.bias',
+                               'attn.proj.bn.running_mean', 'attn.proj.bn.running_var', 'attn.proj.bn.num_batches_tracked',
+                               'attn.pe.conv.weight', 'attn.pe.conv.bias',
+                               'attn.pe.bn.weight', 'attn.pe.bn.bias', 'attn.pe.bn.running_mean',
+                               'attn.pe.bn.running_var', 'attn.pe.bn.num_batches_tracked',
+                               'mlp.0.conv.weight', 'mlp.0.bn.weight', 'mlp.0.bn.bias',
+                               'mlp.0.bn.running_mean', 'mlp.0.bn.running_var', 'mlp.0.bn.num_batches_tracked',
+                               'mlp.1.conv.weight', 'mlp.1.bn.weight', 'mlp.1.bn.bias',
+                               'mlp.1.bn.running_mean', 'mlp.1.bn.running_var', 'mlp.1.bn.num_batches_tracked']:
+                    mapping[f'{prefix_pre}.{suffix}'] = f'{prefix_cur}.{suffix}'
+
+        # FPN/PAN: model.11, 14, 17, 20
+        # conv3_for_upsample1 (model.11)
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'11.{suffix}'] = f'conv3_for_upsample1.{suffix}'
+            mapping[f'11.m.0.{suffix}'] = f'conv3_for_upsample1.m.0.{suffix}'
+
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked',
+                       'cv3.conv.weight', 'cv3.bn.weight', 'cv3.bn.bias', 'cv3.bn.running_mean',
+                       'cv3.bn.running_var', 'cv3.bn.num_batches_tracked']:
+            mapping[f'11.m.0.{suffix}'] = f'conv3_for_upsample1.m.0.{suffix}'
+
+        # C3k2 bottleneck inside A2C2f
+        for m_idx in [0, 1]:
+            for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                           'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                           'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                           'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+                mapping[f'11.m.0.m.{m_idx}.{suffix}'] = f'conv3_for_upsample1.m.0.m.{m_idx}.{suffix}'
+
+        # conv3_for_upsample2 (model.14)
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'14.{suffix}'] = f'conv3_for_upsample2.{suffix}'
+            mapping[f'14.m.0.{suffix}'] = f'conv3_for_upsample2.m.0.{suffix}'
+
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked',
+                       'cv3.conv.weight', 'cv3.bn.weight', 'cv3.bn.bias', 'cv3.bn.running_mean',
+                       'cv3.bn.running_var', 'cv3.bn.num_batches_tracked']:
+            mapping[f'14.m.0.{suffix}'] = f'conv3_for_upsample2.m.0.{suffix}'
+
+        for m_idx in [0, 1]:
+            for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                           'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                           'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                           'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+                mapping[f'14.m.0.m.{m_idx}.{suffix}'] = f'conv3_for_upsample2.m.0.m.{m_idx}.{suffix}'
+
+        # down_sample1 (model.15) + conv3_for_downsample1 (model.17)
+        mapping['15.conv.weight'] = 'down_sample1.conv.weight'
+        mapping['15.bn.weight'] = 'down_sample1.bn.weight'
+        mapping['15.bn.bias'] = 'down_sample1.bn.bias'
+        mapping['15.bn.running_mean'] = 'down_sample1.bn.running_mean'
+        mapping['15.bn.running_var'] = 'down_sample1.bn.running_var'
+        mapping['15.bn.num_batches_tracked'] = 'down_sample1.bn.num_batches_tracked'
+
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'17.{suffix}'] = f'conv3_for_downsample1.{suffix}'
+            mapping[f'17.m.0.{suffix}'] = f'conv3_for_downsample1.m.0.{suffix}'
+
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked',
+                       'cv3.conv.weight', 'cv3.bn.weight', 'cv3.bn.bias', 'cv3.bn.running_mean',
+                       'cv3.bn.running_var', 'cv3.bn.num_batches_tracked']:
+            mapping[f'17.m.0.{suffix}'] = f'conv3_for_downsample1.m.0.{suffix}'
+
+        for m_idx in [0, 1]:
+            for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                           'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                           'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                           'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+                mapping[f'17.m.0.m.{m_idx}.{suffix}'] = f'conv3_for_downsample1.m.0.m.{m_idx}.{suffix}'
+
+        # down_sample2 (model.18) + conv3_for_downsample2 (model.20)
+        mapping['18.conv.weight'] = 'down_sample2.conv.weight'
+        mapping['18.bn.weight'] = 'down_sample2.bn.weight'
+        mapping['18.bn.bias'] = 'down_sample2.bn.bias'
+        mapping['18.bn.running_mean'] = 'down_sample2.bn.running_mean'
+        mapping['18.bn.running_var'] = 'down_sample2.bn.running_var'
+        mapping['18.bn.num_batches_tracked'] = 'down_sample2.bn.num_batches_tracked'
+
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+            mapping[f'20.{suffix}'] = f'conv3_for_downsample2.{suffix}'
+            mapping[f'20.m.0.{suffix}'] = f'conv3_for_downsample2.m.0.{suffix}'
+
+        for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                       'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                       'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                       'cv2.bn.running_var', 'cv2.bn.num_batches_tracked',
+                       'cv3.conv.weight', 'cv3.bn.weight', 'cv3.bn.bias', 'cv3.bn.running_mean',
+                       'cv3.bn.running_var', 'cv3.bn.num_batches_tracked']:
+            mapping[f'20.m.0.{suffix}'] = f'conv3_for_downsample2.m.0.{suffix}'
+
+        for m_idx in [0, 1]:
+            for suffix in ['cv1.conv.weight', 'cv1.bn.weight', 'cv1.bn.bias', 'cv1.bn.running_mean',
+                           'cv1.bn.running_var', 'cv1.bn.num_batches_tracked',
+                           'cv2.conv.weight', 'cv2.bn.weight', 'cv2.bn.bias', 'cv2.bn.running_mean',
+                           'cv2.bn.running_var', 'cv2.bn.num_batches_tracked']:
+                mapping[f'20.m.0.m.{m_idx}.{suffix}'] = f'conv3_for_downsample2.m.0.m.{m_idx}.{suffix}'
+
+        # Detect head (model.21)
+        # cv2: bbox regression
+        for i in range(3):  # 3 detection heads
+            for suffix in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
+                           'bn.running_var', 'bn.num_batches_tracked']:
+                mapping[f'21.cv2.{i}.0.{suffix}'] = f'cv2.{i}.0.{suffix}'
+                mapping[f'21.cv2.{i}.1.{suffix}'] = f'cv2.{i}.1.{suffix}'
+            mapping[f'21.cv2.{i}.2.weight'] = f'cv2.{i}.2.weight'
+            mapping[f'21.cv2.{i}.2.bias'] = f'cv2.{i}.2.bias'
+
+        # cv3: classification (这些通常不匹配因为num_classes不同)
+        for i in range(3):
+            for suffix in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
+                           'bn.running_var', 'bn.num_batches_tracked']:
+                mapping[f'21.cv3.{i}.0.0.{suffix}'] = f'cv3.{i}.0.0.{suffix}'
+                mapping[f'21.cv3.{i}.0.1.{suffix}'] = f'cv3.{i}.0.1.{suffix}'
+                mapping[f'21.cv3.{i}.1.0.{suffix}'] = f'cv3.{i}.1.0.{suffix}'
+                mapping[f'21.cv3.{i}.1.1.{suffix}'] = f'cv3.{i}.1.1.{suffix}'
+            mapping[f'21.cv3.{i}.2.weight'] = f'cv3.{i}.2.weight'
+            mapping[f'21.cv3.{i}.2.bias'] = f'cv3.{i}.2.bias'
+
+        # DFL
+        mapping['21.dfl.conv.weight'] = 'dfl.conv.weight'
+
+        return mapping
 
     def fuse(self):
         """融合Conv和BN层以加速推理"""

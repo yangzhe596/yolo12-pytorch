@@ -1,13 +1,21 @@
 import os
+import time
 
 import torch
 from tqdm import tqdm
 
 from utils.utils import get_lr
-        
-def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callback, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, Epoch, cuda, fp16, scaler, save_period, save_dir, local_rank=0):
+
+def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callback, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, Epoch, cuda, fp16, scaler, save_period, save_dir, local_rank=0, time_analyse=False):
     loss        = 0
     val_loss    = 0
+
+    # 耗时统计变量
+    if time_analyse:
+        time_data_total = 0.0
+        time_forward_total = 0.0
+        time_backward_total = 0.0
+        time_batch_start = time.time()
 
     if local_rank == 0:
         print('Start Train')
@@ -16,6 +24,10 @@ def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callbac
     for iteration, batch in enumerate(gen):
         if iteration >= epoch_step:
             break
+
+        # 数据加载耗时统计
+        if time_analyse:
+            time_data = time.time() - time_batch_start
 
         images, bboxes = batch
         with torch.no_grad():
@@ -30,17 +42,30 @@ def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callbac
             #----------------------#
             #   前向传播
             #----------------------#
-            # dbox, cls, origin_cls, anchors, strides 
+            if time_analyse:
+                torch.cuda.synchronize() if cuda else None
+                time_forward_start = time.time()
+            # dbox, cls, origin_cls, anchors, strides
             outputs = model_train(images)
             loss_value = yolo_loss(outputs, bboxes)
+            if time_analyse:
+                torch.cuda.synchronize() if cuda else None
+                time_forward = time.time() - time_forward_start
+                time_backward_start = time.time()
             #----------------------#
             #   反向传播
             #----------------------#
             loss_value.backward()
             torch.nn.utils.clip_grad_norm_(model_train.parameters(), max_norm=10.0)  # clip gradients
             optimizer.step()
+            if time_analyse:
+                torch.cuda.synchronize() if cuda else None
+                time_backward = time.time() - time_backward_start
         else:
             from torch.cuda.amp import autocast
+            if time_analyse:
+                torch.cuda.synchronize() if cuda else None
+                time_forward_start = time.time()
             with autocast():
                 #----------------------#
                 #   前向传播
@@ -48,6 +73,10 @@ def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callbac
                 outputs         = model_train(images)
                 loss_value = yolo_loss(outputs, bboxes)
 
+            if time_analyse:
+                torch.cuda.synchronize() if cuda else None
+                time_forward = time.time() - time_forward_start
+                time_backward_start = time.time()
             #----------------------#
             #   反向传播
             #----------------------#
@@ -56,13 +85,33 @@ def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callbac
             torch.nn.utils.clip_grad_norm_(model_train.parameters(), max_norm=10.0)  # clip gradients
             scaler.step(optimizer)
             scaler.update()
+            if time_analyse:
+                torch.cuda.synchronize() if cuda else None
+                time_backward = time.time() - time_backward_start
         if ema:
             ema.update(model_train)
 
         loss += loss_value.item()
-        
+
+        # 耗时统计累加与打印
+        if time_analyse:
+            time_data_total += time_data
+            time_forward_total += time_forward
+            time_backward_total += time_backward
+
+            # 每10个batch打印一次平均值
+            if (iteration + 1) % 50 == 0 and local_rank == 0:
+                avg_data = time_data_total / (iteration + 1) * 1000
+                avg_forward = time_forward_total / (iteration + 1) * 1000
+                avg_backward = time_backward_total / (iteration + 1) * 1000
+                pbar.write(f'[Time Analyse] iter {iteration + 1}: '
+                           f'data={avg_data:.1f}ms, forward={avg_forward:.1f}ms, backward={avg_backward:.1f}ms')
+
+            # 记录下一个batch开始时间
+            time_batch_start = time.time()
+
         if local_rank == 0:
-            pbar.set_postfix(**{'loss'  : loss / (iteration + 1), 
+            pbar.set_postfix(**{'loss'  : loss / (iteration + 1),
                                 'lr'    : get_lr(optimizer)})
             pbar.update(1)
 

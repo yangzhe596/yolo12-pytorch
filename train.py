@@ -1,6 +1,7 @@
 #-------------------------------------#
 #       YOLOv12 Training Script
 #-------------------------------------#
+import argparse
 import datetime
 import os
 from functools import partial
@@ -24,6 +25,13 @@ from utils.utils_fit import fit_one_epoch
 训练YOLOv12目标检测模型
 '''
 if __name__ == "__main__":
+    #---------------------------------#
+    #   命令行参数解析
+    #---------------------------------#
+    parser = argparse.ArgumentParser(description='YOLOv12 Training Script')
+    parser.add_argument('--time-analyse', action='store_true', help='开启耗时统计分析')
+    args = parser.parse_args()
+    time_analyse = args.time_analyse
     #---------------------------------#
     #   Cuda    是否使用Cuda
     #           没有GPU可以设置成False
@@ -392,7 +400,7 @@ if __name__ == "__main__":
 
             fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callback, optimizer, epoch,
                          epoch_step, epoch_step_val, gen, gen_val, UnFreeze_Epoch, Cuda, fp16, scaler,
-                         save_period, save_dir, local_rank)
+                         save_period, save_dir, local_rank, time_analyse=time_analyse)
 
             if distributed:
                 dist.barrier()
